@@ -1,6 +1,13 @@
 import sys
 import math
 
+#
+# Globals
+#
+TRIM_TREE = True
+LOCALIZED_TREE = True
+TREE_DEPTH = 3
+
 def parse_input( file_name ):
     layout = []
     source = []
@@ -68,7 +75,7 @@ def parse_input( file_name ):
             blockage = [ int( val ) for val in blockage ]
             blockages.append( blockage )
 
-    return ( layout, source, sinks, wire_lib, buf_lib, vdd_sim, slew_limit, cap_limit, blockage )
+    return ( layout, source, sinks, wire_lib, buf_lib, vdd_sim, slew_limit, cap_limit, blockages )
 
 def write_out( file_name, source, nodes, sinks, wires, buffers ):
     with open( file_name, 'w' ) as outfile:
@@ -242,6 +249,46 @@ def get_valid_nodes( curr_node, valid_nodes, connections, sinks ):
 
     return return_val
 
+def get_center( layout, sinks ):
+    if LOCALIZED_TREE:
+        avg_x = 0
+        avg_y = 0
+        for sink in sinks:
+            avg_x += sink[1]
+            avg_y += sink[2]
+
+        avg_x /= len( sinks )
+        avg_y /= len( sinks )
+
+        return [int( avg_x ), int( avg_y )]
+    
+    return [int( layout[2] / 2 ), int( layout[3] / 2 )]
+
+def get_length( layout, sinks ):
+    if LOCALIZED_TREE:
+        min_x = layout[2]
+        max_x = layout[0]
+        min_y = layout[3]
+        max_y = layout[1]
+        for sink in sinks:
+            if sink[1] < min_x:
+                min_x = sink[1]
+            if sink[1] > max_x:
+                max_x = sink[1]
+            if sink[2] < min_y:
+                min_y = sink[2]
+            if sink[2] > max_y:
+                max_y = sink[2]
+
+        dx = max_x - min_x
+        dy = max_y - min_y
+        if dx > dy:
+            return ( dx / 2 )
+        
+        return ( dy / 2 )
+
+    return ( layout[2] / 2 )
+
 # TODO: h-tree uniform trim and nontrim, non-uniform trim and nontrim
 def synthesize( layout, source, sinks, wire_lib, buf_lib, vdd_sim, slew_limit, cap_limit, blockage ):
     # Init output data
@@ -253,7 +300,7 @@ def synthesize( layout, source, sinks, wire_lib, buf_lib, vdd_sim, slew_limit, c
     
     # Compute center of H-Tree (alt version is local center - ie.
     # average x and y of all sinks)
-    center = [int( layout[2] / 2 ), int( layout[3] / 2 )]
+    center = get_center( layout, sinks )
 
     # Add initial invertor to flip signal
     temp_node = [len( nodes ) + 1, 0, 0]
@@ -276,15 +323,16 @@ def synthesize( layout, source, sinks, wire_lib, buf_lib, vdd_sim, slew_limit, c
     # Iteritvely branch tree
     # Set length as static based on layout
     # alt version: use average center
-    length = layout[2] / 2
-    depth = 3
+    length = get_length( layout, sinks )
+    depth = TREE_DEPTH
     create_htree( node, length, depth, nodes, wires, wire_lib )
 
     # Connect sinks to closest nodes
     sink_nodes = connect_sinks( sinks, nodes, wires, wire_lib )
 
     # Trim all branches that are not connected
-    nodes, wires, vuffers = trim_tree( source_node, wires, buffers, sink_nodes, nodes )
+    if TRIM_TREE:
+        nodes, wires, vuffers = trim_tree( source_node, wires, buffers, sink_nodes, nodes )
 
     # TODO: Insert buffers to solve skew constraints
 
