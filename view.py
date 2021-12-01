@@ -3,8 +3,10 @@ from PIL import Image, ImageDraw
 
 def parse_input( input_file, output_file ):
     layout = []
+    blockages = []
 
     source = []
+
     nodes = []
     sinks = []
     wires = []
@@ -28,6 +30,41 @@ def parse_input( input_file, output_file ):
             sink[2] = int( sink[2] )
             sink[3] = float( sink[3] )
             sinks.append( sink )
+
+        # Wire lib [name, unit R (Ohm/nm), unit C (fF/nm)]
+        num_wires = int( file.readline().split()[2] )
+        for i in range( num_wires ):
+            wire = file.readline().split()
+            # wire = [ float( val ) for val in wire ]
+            # wire[0] = int( wire[0] )
+            # wire_lib.append( wire )
+
+        # Buffer lib [id, spice file, inverted?, input load cap, output
+        # parasitics, output resistance]
+        num_buffers = int( file.readline().split()[2] )
+        for i in range( num_buffers ):
+            buffer = file.readline().split()
+            # buffer[0] = int( buffer[0] )
+            # buffer[2] = int( buffer[2] )
+            # buffer[3] = float( buffer[3] )
+            # buffer[4] = float( buffer[4] )
+            # buffer[5] = float( buffer[5] )
+            # buf_lib.append( buffer )
+
+        # Vdd sim settings
+        vdd_sim = file.readline().split()[2:]
+        # vdd_sim = [ float( val ) for val in vdd_sim ]
+
+        # Slew and capacitance limit
+        slew_limit = float( file.readline().split()[2] )
+        cap_limit = float( file.readline().split()[2] )
+
+        # Blockages [lower left x, y, upper right x, y]
+        num_blockages = int( file.readline().split()[2] )
+        for i in range( num_blockages ):
+            blockage = file.readline().split()
+            blockage = [ int( val ) for val in blockage ]
+            blockages.append( blockage )
 
     with open( output_file, 'r' ) as file:
         # Node name, source name
@@ -67,7 +104,7 @@ def parse_input( input_file, output_file ):
             buffer[2] = int( buffer[2] )
             buffers.append( buffer )
 
-    return ( layout, source, nodes, sinks, wires, buffers )
+    return ( layout, blockages, source, nodes, sinks, wires, buffers )
 
 def get_node( name, nodes, sinks, source ):
     if name == source[0]:
@@ -95,7 +132,7 @@ if __name__ == '__main__':
     output_file = sys.argv[2]
 
     # Parse input
-    layout, source, nodes, sinks, wires, buffers = parse_input( input_file, output_file )
+    layout, blockages, source, nodes, sinks, wires, buffers = parse_input( input_file, output_file )
     
     # Create blank image
     scale = 10e-4
@@ -107,6 +144,10 @@ if __name__ == '__main__':
     # Draw source
     width = 30
     draw.ellipse((source[1] * scale - width, source[2] * scale - width, source[1] * scale + width, source[2] * scale + width), fill='blue', outline='blue')
+
+    # Draw blockages
+    for blockage in blockages:
+        draw.rectangle((blockage[0] * scale, blockage[1] * scale, blockage[2] * scale, blockage[3] * scale), fill='cyan', outline='cyan')
 
     # Draw wires
     for wire in wires:
