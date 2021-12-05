@@ -289,8 +289,197 @@ def get_length( layout, sinks ):
 
     return ( layout[2] / 2 )
 
+def get_cap( node ):
+    return node[3]
+
+def get_wire_length( p1, p2 ):
+    return dist( p1, p2 )
+
+def get_delay( wire, length, load_cap ):
+    # delay = r0 l (0.5 c0 l + Cload)
+    return wire[1] * length * ( 0.5 * wire[2] * length + load_cap )
+
+def get_wires_to_node( node, wires ):
+    wires_to_node = []
+    for wire in wires:
+        if wire[1] == node:
+            wires_to_node.append( wire )
+    
+    return wires_to_node
+
+def get_leaves( wires ):
+    leaves = []
+    
+    from_nodes = []
+    to_nodes = []
+
+    for wire in wires:
+        from_nodes.append( wire[0] )
+        to_nodes.append( wire[1] )
+
+    leaves = list( set( to_nodes ) - set( from_nodes ) - set( [0] ) )
+    return leaves
+
+def get_sink_node( name, sink_nodes, sinks ):
+    sink_name = None
+    for node in sink_nodes:
+        if name == node[0]:
+            sink_name = node[1]
+            break
+
+    for sink in sinks:
+        if sink[0] == sink_name:
+            return sink
+
+    return None
+
+def get_node_loc( name, nodes, sink_nodes, sinks ):
+    for node in nodes:
+        if node[0] == name:
+            return node[1], node[2]
+
+    for node in sink_nodes:
+        if node[0] == name:
+            for sink in sinks:
+                if node[1] == sink[0]:
+                    return sink[1], sink[2]
+
+    return -1, -1
+
+def get_node( name, nodes, sink_nodes, sinks ):
+    for node in nodes:
+        if node[0] == name:
+            return node
+
+    for node in sink_nodes:
+        if node[0] == name:
+            for sink in sinks:
+                if node[1] == sink[0]:
+                    return sink
+
+    return None
+
+def is_valid_location( point, blockages ):
+    for blockage in blockages:
+        if point[0] >= blockage[0] and point[0] <= blockage[2]:
+            if point[1] >= blockage[1] and point[1] <= blockage[3]:
+                return False
+    
+    return True
+
+def is_valid_point( point, start_point, end_point, vertical ):
+    if vertical:
+        if start_point[2] > end_point[2]:
+            return point[1] > end_point[2]
+        else:
+            return point[1] < end_point[2]
+    else:
+        if start_point[1] > end_point[1]:
+            return point[0] > end_point[1]
+        else:
+            return point[0] < end_point[1]
+    
+    return False
+
+def get_feasible_insertion_points( node1, node2, dist, blockages ):
+    points = []
+    vertical = node1[1] == node2[1] # X values are the same so we climb y
+
+    curr_point = [ node2[1], node2[2] ]
+    stopping_val = node1[2]
+
+    if vertical:
+        if node2[2] > node1[2]:
+            dist *= -1
+
+        curr_point[1] += dist
+    else:
+        if node2[1] > node1[1]:
+            dist *= -1
+
+        stopping_val = node1[1]
+        curr_point[0] += dist
+
+    while is_valid_point( curr_point, node2, node1, vertical ):
+        if is_valid_location( curr_point, blockages ):
+            points.append( curr_point )
+
+        if vertical:
+            curr_point = [curr_point[0], curr_point[1] + dist]
+        else:
+            curr_point = [curr_point[0] + dist, curr_point[1]]
+
+    return points
+
+def _insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, sinks ):
+    # option = (slew, cap, delay, RAQ, skew, inv_cnt, ( type, Node num?/loc/ptr? ))
+    # type = 0 for single, 1 for merge, 2 for sink, 3 for leaf
+    options = []
+
+    # dist between insertion points
+    dist = 10000
+
+    leaves = get_leaves( wires )
+    wires_to_analyze = []
+    for leaf in leaves:
+        wires_to_analyze += get_wires_to_node( leaf, wires )
+
+        # Add initial option
+        # At sink: option = (0, Cs, 0, 0, 0, 0, (0, Node name))
+        _type = 3
+        cap = 0
+        if is_sink( leaf, sink_nodes ):
+            _type = 2
+            cap = get_cap( get_sink_node( leaf, sink_nodes, sinks ) )
+
+        x, y = get_node_loc( leaf, nodes, sink_nodes, sinks )
+        option = ( 0, cap, 0, 0, 0, 0, ( _type, leaf, (x, y) ) )
+        options.append( option )
+
+    # TODO: maintian a list of nodes to get wire connections from (pop these off like i pop options off based on wire connection to node)
+    while ( len( wires_to_analyze ) ):
+        # Get wire to check for insertion points
+        wire_to_analyze = wires_to_analyze.pop( 0 )
+
+        # Get option that wire points to so we can create new options from it
+        # TODO: do we need to get all options with node = to node? Probably yes
+        curr_option = None
+        curr_option_idx = -1
+        for i in range( len( options ) ):
+            if options[i][6][1] == wire_to_analyze[1]:
+                curr_option_idx = i
+        curr_option = options.pop( curr_option_idx )
+
+        # Get insertion points
+        from_node = get_node( wire_to_analyze[0], nodes, sink_nodes, sinks )
+        to_node = get_node( wire_to_analyze[1], nodes, sink_nodes, sinks )
+        insertion_points = get_feasible_insertion_points( from_node, to_node, dist, blockages )
+
+        # Generate new options
+
+    # TODO: Start from bottom and find candidate solutions up wards (make sure buffer can be places at location)
+    # TODO: as we go up, toss solns that have c > C and s > S
+    # TODO: when merging prune solutions that do not have skew diff < 3?
+    # TODO: also prune those where RAQ and c are bad (same as buffer insertion time!)
+
+    # TODO: at root remove all with odd inverter cnt
+    # TODO: pick best candidate and then add nodes and buffers and update wires
+    
+    # TODO: cap = Cload + c0 l, no buffer else cap = Cbuffer
+    # TODO: RAQ = from buffer insertion
+    # TODO: slew = ln 9 * de at merge: slew = max left right slew + ln 9 * de
+    # TODO: skew = skew of child else at merge skew = abs(skew l - skew r)
+
+
+def insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, sinks ):    
+    best_option = _insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, sinks )
+
+    # TODO: start from scratch and remake wires nodes buffers etc
+
+    return nodes, wires, buffers
+
 # TODO: h-tree uniform trim and nontrim, non-uniform trim and nontrim
-def synthesize( layout, source, sinks, wire_lib, buf_lib, vdd_sim, slew_limit, cap_limit, blockage ):
+def synthesize( layout, source, sinks, wire_lib, buf_lib, vdd_sim, slew_limit, cap_limit, blockages ):
     # Init output data
     source_node = [0, source[0]]
     nodes = []
@@ -332,9 +521,10 @@ def synthesize( layout, source, sinks, wire_lib, buf_lib, vdd_sim, slew_limit, c
 
     # Trim all branches that are not connected
     if TRIM_TREE:
-        nodes, wires, vuffers = trim_tree( source_node, wires, buffers, sink_nodes, nodes )
+        nodes, wires, buffers = trim_tree( source_node, wires, buffers, sink_nodes, nodes )
 
-    # TODO: Insert buffers to solve skew constraints
+    # Insert buffers
+    nodes, wires, buffers = insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, sinks )
 
     return ( source_node, nodes, sink_nodes, wires, buffers )
 
@@ -350,10 +540,10 @@ if __name__ == '__main__':
     output_file = sys.argv[2]
 
     # Parse input
-    layout, source, sinks, wire_lib, buf_lib, vdd_sim, slew_limit, cap_limit, blockage = parse_input( input_file )
+    layout, source, sinks, wire_lib, buf_lib, vdd_sim, slew_limit, cap_limit, blockages = parse_input( input_file )
     
     # Synthesize clock
-    source_node, nodes, sink_nodes, wires, buffers = synthesize( layout, source, sinks, wire_lib, buf_lib, vdd_sim, slew_limit, cap_limit, blockage )
+    source_node, nodes, sink_nodes, wires, buffers = synthesize( layout, source, sinks, wire_lib, buf_lib, vdd_sim, slew_limit, cap_limit, blockages )
 
     # Write output
     write_out( output_file, source_node, nodes, sink_nodes, wires, buffers )
