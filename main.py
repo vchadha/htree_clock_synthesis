@@ -7,6 +7,11 @@ import math
 TRIM_TREE = True
 LOCALIZED_TREE = True
 TREE_DEPTH = 3
+SKEW_DIFF = 7
+INSERTION_DIST = 30000
+
+SLEW_LIMIT = 0
+CAP_LIMIT = 0
 
 def parse_input( file_name ):
     layout = []
@@ -307,6 +312,14 @@ def get_wires_to_node( node, wires ):
     
     return wires_to_node
 
+def get_wires_from_node( node, wires ):
+    wires_from_node = []
+    for wire in wires:
+        if wire[0] == node:
+            wires_from_node.append( wire )
+
+    return wires_from_node
+
 def get_leaves( wires ):
     leaves = []
     
@@ -411,65 +424,229 @@ def get_feasible_insertion_points( node1, node2, dist, blockages ):
 
     return points
 
+def get_wire_cap( wire_lib ):
+    return wire_lib[get_wire_type( wire_lib )][2]
+
+def get_wire_resistence( wire_lib ):
+    return wire_lib[get_wire_type( wire_lib )][1]
+
+def get_buffer_cap( buf_lib ):
+    return buf_lib[get_buffer_type( buf_lib )][3]
+
+def prune_options( options ):
+    return options
+
 def _insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, sinks ):
-    # option = (slew, cap, delay, RAQ, skew, inv_cnt, ( type, Node num?/loc/ptr? ))
-    # type = 0 for single, 1 for merge, 2 for sink, 3 for leaf
+    # option = (to node, x, y, slew, cap, delay, RAQ, skew, inv_cnt, buffer?, ( type, ptr ))
+    # type = 0 - single, 1 - branch ( 1, (to_node, ptr), (to_node, ptr) )
     options = []
-
-    # dist between insertion points
-    dist = 10000
-
+    
+    # each node has a list of options (when we get to root, we have one node and a final list of options)
     leaves = get_leaves( wires )
-    wires_to_analyze = []
-    for leaf in leaves:
-        wires_to_analyze += get_wires_to_node( leaf, wires )
+    nodes_to_analyze = leaves
 
-        # Add initial option
-        # At sink: option = (0, Cs, 0, 0, 0, 0, (0, Node name))
-        _type = 3
-        cap = 0
-        if is_sink( leaf, sink_nodes ):
-            _type = 2
-            cap = get_cap( get_sink_node( leaf, sink_nodes, sinks ) )
+    buffer_dist = INSERTION_DIST
+    
+    while ( True ):
+        print(nodes_to_analyze, len( options ))
+        wires_to_analyze = []
+        for node in nodes_to_analyze:
+            wires_to_analyze += get_wires_to_node( node, wires )
 
-        x, y = get_node_loc( leaf, nodes, sink_nodes, sinks )
-        option = ( 0, cap, 0, 0, 0, 0, ( _type, leaf, (x, y) ) )
-        options.append( option )
+            x, y = get_node_loc( node, nodes, sink_nodes, sinks )
+            complete_node = [node, x, y]
 
-    # TODO: maintian a list of nodes to get wire connections from (pop these off like i pop options off based on wire connection to node)
-    while ( len( wires_to_analyze ) ):
+
+            # Add initial option
+            # At sink: option = (node, x, y, 0, Cs, 0, 0, 0, [0], 0, (0, None))
+            if is_sink( node, sink_nodes ) or node in leaves:
+                _type = 0
+                cap = 0
+                if is_sink( node, sink_nodes ):
+                    cap = get_cap( get_sink_node( node, sink_nodes, sinks ) )
+                option = ( node, x, y, 0, cap, 0, 0, 0, [0], 0, ( _type, None ) )
+                options.append( option )
+
+            # Multiple branches
+            elif len( get_wires_from_node( node, wires ) ) > 1:
+                # Wires from node
+                wires_from_node = get_wires_from_node( node, wires )
+
+                # Get all options with to node
+                merge_options = [ [] for _ in range( len( wires_from_node ) ) ]
+                for i in range( len( wires_from_node ) ):
+                    for j in range( len( options ) - 1, -1, -1 ):
+                        if options[j][0] == wires_from_node[i][1]:
+                            merge_options[i].append( options.pop( j ) )
+                
+                print('merge banch: ', len(merge_options))
+                all_combinations = [ (op1, op2) for op1 in merge_options[0] for op2 in merge_options[1] ]
+                for combination in all_combinations:
+                    op1 = combination[0]
+                    op2 = combination[1]
+                    # Create option
+                    slew = 0
+                    if op2[3] > op1[3]:
+                        wire = wire_lib[get_wire_type( wire_lib )]
+                        length = dist( complete_node, op2 )
+                        load_cap = get_wire_cap( wire_lib )
+                        slew = op2[3] + math.log( 9 ) * get_delay( wire, length, load_cap )
+                    else:
+                        wire = wire_lib[get_wire_type( wire_lib )]
+                        length = dist( complete_node, op1 )
+                        load_cap = get_wire_cap( wire_lib )
+
+                        slew = op1[3] + math.log( 9 ) * get_delay( wire, length, load_cap )
+
+                    cap = op1[4] + op2[4]
+
+                    delay = 0
+                    if op2[5] > op1[5]:
+                        wire = wire_lib[get_wire_type( wire_lib )]
+                        length = dist( complete_node, op2 )
+                        load_cap = get_wire_cap( wire_lib )
+                        delay = op2[5] + get_delay( wire, length, load_cap )
+                    else:
+                        wire = wire_lib[get_wire_type( wire_lib )]
+                        length = dist( complete_node, op1 )
+                        load_cap = get_wire_cap( wire_lib )
+                        delay = op1[5] + get_delay( wire, length, load_cap )
+
+                    # TODO: do I want RAQ?
+                    raq = 0
+
+                    # TODO: this should be diff in delay right?
+                    skew = abs( op1[7] - op2[7] )
+                    invt_cnt = op1[8] + op2[8]
+
+                    temp_option = ( node, x, y, slew, cap, delay, raq, skew, invt_cnt, 0, ( 1, ( ( op1[0], op1 ), ( op2[0], op2 ) ) ) )
+
+                    # If option is valid, add to option lists
+                    if temp_option[3] < SLEW_LIMIT and temp_option[4] < CAP_LIMIT and temp_option[7] < SKEW_DIFF:
+                        options.append( temp_option )
+
+            # Single branch
+            else:
+                wires_from_node = get_wires_from_node( node, wires )
+
+                options_to_check = []
+                for i in range( len( wires_from_node ) ):
+                    for j in range( len( options ) - 1, -1, -1 ):
+                        if options[j][0] == wires_from_node[i][1]:
+                            options_to_check.append( options.pop( j ) )
+
+                print('single branch: ', len(options_to_check))
+                for option in options_to_check:
+                    # Create option
+                    cap = option[4] + get_wire_cap( wire_lib ) * dist( complete_node, option )
+
+                    wire = wire_lib[get_wire_type( wire_lib )]
+                    length = dist( complete_node, option )
+                    load_cap = get_wire_cap( wire_lib )
+                    delay = option[5] + get_delay( wire, length, load_cap )
+
+                    slew = math.log( 9 ) * get_delay( wire, length, load_cap )
+
+                    # TODO: do I want raq
+                    raq = 0
+
+                    # TODO: I feel like skew is wrong
+                    skew = option[7]
+                    invt_cnt = option[8]
+
+                    temp_option = ( node, x, y, slew, cap, delay, raq, skew, invt_cnt, 0, ( 0, option ) )
+
+                    # if option is valid add to options list
+                    if temp_option[3] < SLEW_LIMIT and temp_option[4] < CAP_LIMIT:
+                        options.append( temp_option )
+
+        # Remove all nodes
+        nodes_to_analyze = []
+
+        # Prune options
+        options = prune_options( options )
+
+        print('Start part 2 - traversal')
+
+        # Reached root node
+        if len( wires_to_analyze ) == 0:
+            break
+
         # Get wire to check for insertion points
-        wire_to_analyze = wires_to_analyze.pop( 0 )
+        for wire_to_analyze in wires_to_analyze:
+            # Add from node
+            if wire_to_analyze[0] not in nodes_to_analyze:
+                nodes_to_analyze.append( wire_to_analyze[0] )
 
-        # Get option that wire points to so we can create new options from it
-        # TODO: do we need to get all options with node = to node? Probably yes
-        curr_option = None
-        curr_option_idx = -1
-        for i in range( len( options ) ):
-            if options[i][6][1] == wire_to_analyze[1]:
-                curr_option_idx = i
-        curr_option = options.pop( curr_option_idx )
+            # Get options that wire points to so we can create new options from it
+            curr_options = []
+            for i in range( len( options ) - 1, -1, -1 ):
+                if options[i][0] == wire_to_analyze[1]:
+                    curr_options.append( options.pop( i ) )
 
-        # Get insertion points
-        from_node = get_node( wire_to_analyze[0], nodes, sink_nodes, sinks )
-        to_node = get_node( wire_to_analyze[1], nodes, sink_nodes, sinks )
-        insertion_points = get_feasible_insertion_points( from_node, to_node, dist, blockages )
+            # Get insertion points
+            from_node = get_node( wire_to_analyze[0], nodes, sink_nodes, sinks )
+            to_node = get_node( wire_to_analyze[1], nodes, sink_nodes, sinks )
 
-        # Generate new options
+            wire_length = get_wire_length( from_node, to_node )
+            if wire_length > 70000:
+                buffer_dist = wire_length / 10            
+            insertion_points = get_feasible_insertion_points( from_node, to_node, buffer_dist, blockages )
+            print('insertion points: ', len(insertion_points))
 
-    # TODO: Start from bottom and find candidate solutions up wards (make sure buffer can be places at location)
-    # TODO: as we go up, toss solns that have c > C and s > S
-    # TODO: when merging prune solutions that do not have skew diff < 3?
+            # Iterate over insertion points
+            for point in insertion_points:
+                new_options = []
+                for option in curr_options:
+                    # Generate new options at point
+                    
+                    cap = option[4] + get_wire_cap( wire_lib ) * dist( [0, point[0], point[1]], option )
+                    
+                    wire = wire_lib[get_wire_type( wire_lib )]
+                    length = dist( [0, point[0], point[1]], option )
+                    load_cap = get_wire_cap( wire_lib )
+                    delay = option[5] + get_delay( wire, length, load_cap )
+
+                    slew = math.log( 9 ) * get_delay( wire, length, load_cap )
+
+                    # TODO: do I want raq?
+                    raq = 0
+
+                    # I feel like skew is wrong
+                    skew = option[7]
+                    invt_cnt = option[8]
+
+                    temp_option1 = ( option[0], point[0], point[1], slew, cap, delay, raq, skew, invt_cnt, 0, ( 0, option ) )
+
+                    buf_cap = get_buffer_cap( buf_lib )
+                    new_invt_cnt = []
+                    for cnt in invt_cnt:
+                        new_invt_cnt.append( cnt + 1 )
+                    # TODO: add delay of buffer
+                    temp_option2 = ( option[0], point[0], point[1], slew, buf_cap, delay, raq, skew, new_invt_cnt, 1, ( 0, option ) )
+                    
+                    # Check if options are valid
+                    if temp_option1[3] < SLEW_LIMIT and temp_option1[4] < CAP_LIMIT:
+                        new_options.append( temp_option1 )
+                    
+                    if temp_option2[3] < SLEW_LIMIT and temp_option2[4] < CAP_LIMIT:
+                        new_options.append( temp_option2 )
+
+                # TODO: do I want to prune here too?
+                new_options = prune_options( new_options )
+                curr_options = new_options
+
+            for option in curr_options:
+                options.append( option )
+
+            options = prune_options( options )
+
+
+    print( options[0] )
     # TODO: also prune those where RAQ and c are bad (same as buffer insertion time!)
 
     # TODO: at root remove all with odd inverter cnt
     # TODO: pick best candidate and then add nodes and buffers and update wires
-    
-    # TODO: cap = Cload + c0 l, no buffer else cap = Cbuffer
-    # TODO: RAQ = from buffer insertion
-    # TODO: slew = ln 9 * de at merge: slew = max left right slew + ln 9 * de
-    # TODO: skew = skew of child else at merge skew = abs(skew l - skew r)
-
 
 def insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, sinks ):    
     best_option = _insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, sinks )
@@ -541,7 +718,9 @@ if __name__ == '__main__':
 
     # Parse input
     layout, source, sinks, wire_lib, buf_lib, vdd_sim, slew_limit, cap_limit, blockages = parse_input( input_file )
-    
+    SLEW_LIMIT = slew_limit
+    CAP_LIMIT = cap_limit
+
     # Synthesize clock
     source_node, nodes, sink_nodes, wires, buffers = synthesize( layout, source, sinks, wire_lib, buf_lib, vdd_sim, slew_limit, cap_limit, blockages )
 
