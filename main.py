@@ -6,12 +6,14 @@ import math
 #
 TRIM_TREE = True
 LOCALIZED_TREE = True
+
 TREE_DEPTH = 3
-SKEW_DIFF = 7
-INSERTION_DIST = 30000
+SKEW_DIFF = 10
 
 SLEW_LIMIT = 0
 CAP_LIMIT = 0
+
+CLOCK_PERIOD = 500 #ps
 
 def parse_input( file_name ):
     layout = []
@@ -433,8 +435,24 @@ def get_wire_resistence( wire_lib ):
 def get_buffer_cap( buf_lib ):
     return buf_lib[get_buffer_type( buf_lib )][3]
 
+def get_buffer_resistence( buf_lib ):
+    return buf_lib[get_buffer_type( buf_lib )][5]
+
 def prune_options( options ):
-    return options
+    new_options = []
+
+    for option in options:
+        option_valid = True
+
+        for op_cmp in options:
+            if option[6] <= op_cmp[6] and option[4] > op_cmp[4]:
+                option_valid = False
+                break
+        
+        if option_valid:
+            new_options.append( option )
+     
+    return new_options
 
 def _insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, sinks ):
     # option = (to node, x, y, slew, cap, delay, RAQ, skew, inv_cnt, buffer?, ( type, ptr ))
@@ -444,11 +462,8 @@ def _insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, 
     # each node has a list of options (when we get to root, we have one node and a final list of options)
     leaves = get_leaves( wires )
     nodes_to_analyze = leaves
-
-    buffer_dist = INSERTION_DIST
     
     while ( True ):
-        print(nodes_to_analyze, len( options ))
         wires_to_analyze = []
         for node in nodes_to_analyze:
             wires_to_analyze += get_wires_to_node( node, wires )
@@ -458,13 +473,13 @@ def _insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, 
 
 
             # Add initial option
-            # At sink: option = (node, x, y, 0, Cs, 0, 0, 0, [0], 0, (0, None))
+            # At sink: option = (node, x, y, 0, Cs, 0, Ts, 0, [0], 0, (0, None))
             if is_sink( node, sink_nodes ) or node in leaves:
                 _type = 0
                 cap = 0
                 if is_sink( node, sink_nodes ):
                     cap = get_cap( get_sink_node( node, sink_nodes, sinks ) )
-                option = ( node, x, y, 0, cap, 0, 0, 0, [0], 0, ( _type, None ) )
+                option = ( node, x, y, 0, cap, 0, CLOCK_PERIOD, 0, [0], 0, ( _type, None ) )
                 options.append( option )
 
             # Multiple branches
@@ -479,7 +494,6 @@ def _insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, 
                         if options[j][0] == wires_from_node[i][1]:
                             merge_options[i].append( options.pop( j ) )
                 
-                print('merge banch: ', len(merge_options))
                 all_combinations = [ (op1, op2) for op1 in merge_options[0] for op2 in merge_options[1] ]
                 for combination in all_combinations:
                     op1 = combination[0]
@@ -489,14 +503,14 @@ def _insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, 
                     if op2[3] > op1[3]:
                         wire = wire_lib[get_wire_type( wire_lib )]
                         length = dist( complete_node, op2 )
-                        load_cap = get_wire_cap( wire_lib )
-                        slew = op2[3] + math.log( 9 ) * get_delay( wire, length, load_cap )
+                        load_cap = op2[4]
+                        slew = math.log( 9 ) * get_delay( wire, length, load_cap )
                     else:
                         wire = wire_lib[get_wire_type( wire_lib )]
                         length = dist( complete_node, op1 )
-                        load_cap = get_wire_cap( wire_lib )
+                        load_cap = op1[4]
 
-                        slew = op1[3] + math.log( 9 ) * get_delay( wire, length, load_cap )
+                        slew = math.log( 9 ) * get_delay( wire, length, load_cap )
 
                     cap = op1[4] + op2[4]
 
@@ -504,19 +518,16 @@ def _insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, 
                     if op2[5] > op1[5]:
                         wire = wire_lib[get_wire_type( wire_lib )]
                         length = dist( complete_node, op2 )
-                        load_cap = get_wire_cap( wire_lib )
+                        load_cap = op2[4]
                         delay = op2[5] + get_delay( wire, length, load_cap )
                     else:
                         wire = wire_lib[get_wire_type( wire_lib )]
                         length = dist( complete_node, op1 )
-                        load_cap = get_wire_cap( wire_lib )
+                        load_cap = op1[4]
                         delay = op1[5] + get_delay( wire, length, load_cap )
 
-                    # TODO: do I want RAQ?
-                    raq = 0
-
-                    # TODO: this should be diff in delay right?
-                    skew = abs( op1[7] - op2[7] )
+                    raq = min( op1[6], op2[6] )
+                    skew = abs( op1[5] - op2[5] )
                     invt_cnt = op1[8] + op2[8]
 
                     temp_option = ( node, x, y, slew, cap, delay, raq, skew, invt_cnt, 0, ( 1, ( ( op1[0], op1 ), ( op2[0], op2 ) ) ) )
@@ -535,22 +546,17 @@ def _insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, 
                         if options[j][0] == wires_from_node[i][1]:
                             options_to_check.append( options.pop( j ) )
 
-                print('single branch: ', len(options_to_check))
                 for option in options_to_check:
                     # Create option
                     cap = option[4] + get_wire_cap( wire_lib ) * dist( complete_node, option )
-
+                    
                     wire = wire_lib[get_wire_type( wire_lib )]
                     length = dist( complete_node, option )
-                    load_cap = get_wire_cap( wire_lib )
+                    load_cap = option[4]
+                    
                     delay = option[5] + get_delay( wire, length, load_cap )
-
                     slew = math.log( 9 ) * get_delay( wire, length, load_cap )
-
-                    # TODO: do I want raq
-                    raq = 0
-
-                    # TODO: I feel like skew is wrong
+                    raq = option[6] - get_delay( wire, length, load_cap )
                     skew = option[7]
                     invt_cnt = option[8]
 
@@ -565,8 +571,6 @@ def _insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, 
 
         # Prune options
         options = prune_options( options )
-
-        print('Start part 2 - traversal')
 
         # Reached root node
         if len( wires_to_analyze ) == 0:
@@ -588,11 +592,28 @@ def _insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, 
             from_node = get_node( wire_to_analyze[0], nodes, sink_nodes, sinks )
             to_node = get_node( wire_to_analyze[1], nodes, sink_nodes, sinks )
 
+            # Calculate buffer dist to allow for good slew
             wire_length = get_wire_length( from_node, to_node )
-            if wire_length > 70000:
-                buffer_dist = wire_length / 10            
+            buffer_dist = 10000
+
+            if wire_length != 0:
+                avg_cap = 0
+                for op in curr_options:
+                    avg_cap += op[4]
+                if len( curr_options ):
+                    avg_cap /= len( curr_options )
+                _load_cap = avg_cap
+                _r = get_wire_resistence( wire_lib )
+                _c = get_wire_cap( wire_lib )
+                
+                _a = math.sqrt( 2 * math.log( 3 ) )
+                _b = math.sqrt( ( wire_length ** 2 ) * _r * ( 198 * _c  + 2 * _r * ( _load_cap ** 2 ) * math.log( 3 ) ) )
+                _d = 2 * wire_length * _r * _load_cap * math.log( 3 )
+                _x = ( 1 / 198 ) * ( _a * _b + _d )
+
+                buffer_dist = wire_length / _x
+            
             insertion_points = get_feasible_insertion_points( from_node, to_node, buffer_dist, blockages )
-            print('insertion points: ', len(insertion_points))
 
             # Iterate over insertion points
             for point in insertion_points:
@@ -604,15 +625,12 @@ def _insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, 
                     
                     wire = wire_lib[get_wire_type( wire_lib )]
                     length = dist( [0, point[0], point[1]], option )
-                    load_cap = get_wire_cap( wire_lib )
+                    load_cap = option[4]
                     delay = option[5] + get_delay( wire, length, load_cap )
 
                     slew = math.log( 9 ) * get_delay( wire, length, load_cap )
+                    raq = option[6] - get_delay( wire, length, load_cap )
 
-                    # TODO: do I want raq?
-                    raq = 0
-
-                    # I feel like skew is wrong
                     skew = option[7]
                     invt_cnt = option[8]
 
@@ -622,8 +640,12 @@ def _insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, 
                     new_invt_cnt = []
                     for cnt in invt_cnt:
                         new_invt_cnt.append( cnt + 1 )
-                    # TODO: add delay of buffer
-                    temp_option2 = ( option[0], point[0], point[1], slew, buf_cap, delay, raq, skew, new_invt_cnt, 1, ( 0, option ) )
+                    
+                    buf_delay = get_buffer_resistence( buf_lib ) * ( option[4] + get_wire_cap( wire_lib ) )
+                    new_delay = delay + buf_delay
+                    new_raq = raq - buf_delay
+
+                    temp_option2 = ( option[0], point[0], point[1], slew, buf_cap, new_delay, new_raq, skew, new_invt_cnt, 1, ( 0, option ) )
                     
                     # Check if options are valid
                     if temp_option1[3] < SLEW_LIMIT and temp_option1[4] < CAP_LIMIT:
@@ -632,7 +654,6 @@ def _insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, 
                     if temp_option2[3] < SLEW_LIMIT and temp_option2[4] < CAP_LIMIT:
                         new_options.append( temp_option2 )
 
-                # TODO: do I want to prune here too?
                 new_options = prune_options( new_options )
                 curr_options = new_options
 
@@ -641,11 +662,15 @@ def _insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, 
 
             options = prune_options( options )
 
+    # Prune all options at root that have odd inverter cnt (we always add an inverter at the root)
+    for i in range( len( options ) - 1, -1, -1 ):
+        invt_cnt = options[i][8]
+        for cnt in invt_cnt:
+            if cnt % 2 != 0:
+                options.pop( i )
+                break
 
-    print( options[0] )
-    # TODO: also prune those where RAQ and c are bad (same as buffer insertion time!)
-
-    # TODO: at root remove all with odd inverter cnt
+    print( len(options) )
     # TODO: pick best candidate and then add nodes and buffers and update wires
 
 def insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, sinks ):    
@@ -720,6 +745,8 @@ if __name__ == '__main__':
     layout, source, sinks, wire_lib, buf_lib, vdd_sim, slew_limit, cap_limit, blockages = parse_input( input_file )
     SLEW_LIMIT = slew_limit
     CAP_LIMIT = cap_limit
+    # SLEW_LIMIT = 150
+    # CAP_LIMIT = 100
 
     # Synthesize clock
     source_node, nodes, sink_nodes, wires, buffers = synthesize( layout, source, sinks, wire_lib, buf_lib, vdd_sim, slew_limit, cap_limit, blockages )
