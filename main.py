@@ -11,12 +11,15 @@ TRIM_TREE = True
 LOCALIZED_TREE = True
 
 TREE_DEPTH = 3
-SKEW_DIFF = 10
-INSERTION_DIST = 10000
+SKEW_DIFF = math.inf
+INSERTION_AMT = 10
 SAMPLING_AMT = 500
 
 SLEW_LIMIT = math.inf
-CAP_LIMIT = math.inf
+# CAP_LIMIT = math.inf
+
+# SLEW_LIMIT = 0
+CAP_LIMIT = 0
 
 CLOCK_PERIOD = 500 #ps
 
@@ -523,6 +526,7 @@ def _insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, 
     nodes_to_analyze = leaves
     
     while ( True ):
+        print(nodes_to_analyze, len(options))
         wires_to_analyze = []
         for node in nodes_to_analyze:
             wires_to_analyze += get_wires_to_node( node, wires )
@@ -549,6 +553,7 @@ def _insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, 
 
             # Multiple branches
             elif len( get_wires_from_node( node, wires ) ) > 1:
+                print('merging')
                 # Wires from node
                 wires_from_node = get_wires_from_node( node, wires )
 
@@ -560,6 +565,7 @@ def _insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, 
                             merge_options[i].append( options.pop( j ) )
                 
                 all_combinations = [ (op1, op2) for op1 in merge_options[0] for op2 in merge_options[1] ]
+                print(len(all_combinations))
                 for combination in all_combinations:
                     op1 = combination[0]
                     op2 = combination[1]
@@ -600,9 +606,11 @@ def _insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, 
                     # If option is valid, add to option lists
                     if temp_option[3] < SLEW_LIMIT and temp_option[4] < CAP_LIMIT and temp_option[7] < SKEW_DIFF:
                         options.append( temp_option )
+                
 
             # Single branch
             else:
+                print('single')
                 wires_from_node = get_wires_from_node( node, wires )
 
                 options_to_check = []
@@ -633,9 +641,12 @@ def _insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, 
 
         # Remove all nodes
         nodes_to_analyze = []
-
+        
+        print('part 1 - options: ', len(options))
         # Prune options
         options = prune_options( options )
+        print('part 1 - prine: ', len(options))
+
 
         # Reached root node
         if len( wires_to_analyze ) == 0:
@@ -659,24 +670,7 @@ def _insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, 
 
             # Calculate buffer dist to allow for good slew
             wire_length = get_wire_length( from_node, to_node )
-            buffer_dist = INSERTION_DIST
-
-            # if wire_length != 0:
-            #     avg_cap = 0
-            #     for op in curr_options:
-            #         avg_cap += op[4]
-            #     if len( curr_options ):
-            #         avg_cap /= len( curr_options )
-            #     _load_cap = avg_cap
-            #     _r = get_wire_resistence( wire_lib )
-            #     _c = get_wire_cap( wire_lib )
-                
-            #     _a = math.sqrt( 2 * math.log( 3 ) )
-            #     _b = math.sqrt( ( wire_length ** 2 ) * _r * ( 198 * _c  + 2 * _r * ( _load_cap ** 2 ) * math.log( 3 ) ) )
-            #     _d = 2 * wire_length * _r * _load_cap * math.log( 3 )
-            #     _x = ( 1 / 198 ) * ( _a * _b + _d )
-
-            #     buffer_dist = wire_length / _x
+            buffer_dist = wire_length / INSERTION_AMT
             
             insertion_points = get_feasible_insertion_points( from_node, to_node, buffer_dist, blockages )
             
@@ -728,7 +722,7 @@ def _insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, 
                 options.append( option )
 
             options = prune_options( options )
-
+    print(len(options))
     # Prune all options at root that have odd inverter cnt (we always add an inverter at the root)
     for i in range( len( options ) - 1, -1, -1 ):
         invt_cnt = options[i][8]
@@ -736,22 +730,34 @@ def _insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, 
             if cnt % 2 != 0:
                 options.pop( i )
                 break
-
+    print(len(options))
     # Pick best candidate and then add nodes and buffers and update wires
     if len(options) == 0:
         return None
 
-    best_option = options[0]
+    # Balance skew [7] and cap [4]
+    total_cap = 0
+    total_skew = 0
     for option in options:
-        if option[7] < best_option[7]:
-            best_option = option
-        elif option[7] == best_option[7]:
-            if option[3] < best_option[3]:
-                best_option = option
-            elif option[3] == best_option[3]:
-                if option[4] < option[4]:
-                    best_option = option
+        total_cap += option[4]
+        total_skew += option[7]
 
+    scores = []
+    for option in options:
+        cap_score = 0
+        if total_cap:
+            cap_score = option[4] / total_cap
+
+        skew_score = 0
+        if total_skew:
+            skew_score = option[7] / total_skew
+
+        score = 0.5 * ( cap_score + skew_score )
+        scores.append(score)
+
+    val, idx = min((val, idx) for (idx, val) in enumerate(scores))
+
+    best_option = options[idx]
     return best_option
 
 def insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, sinks, wire_lib, buf_lib ):    
@@ -765,6 +771,8 @@ def insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, s
     new_wires = []
     new_buffers = []
     new_sinks = []
+    
+    initial_connecting_wire = None
 
     # Add initial source buffer
     buffer = [source_node[0], 1, get_buffer_type( buf_lib )]
@@ -777,7 +785,7 @@ def insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, s
     nodes_to_analyze = [ (None, best_option) ]
 
     while( len( nodes_to_analyze ) ):
-        node_to_analyze = nodes_to_analyze.pop()
+        node_to_analyze = nodes_to_analyze.pop( 0 )
         connecting_wire = node_to_analyze[0]
         option = node_to_analyze[1]
 
@@ -827,10 +835,13 @@ def insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, s
 
         # Branch
         if option[10][0] == 1:
-            nodes_to_analyze.append( ( connecting_wire, option[10][1][0] ) )
-            nodes_to_analyze.append( ( connecting_wire, option[10][1][1] ) )
+            nodes_to_analyze.append( ( connecting_wire, option[10][1][0][1] ) )
+            nodes_to_analyze.append( ( connecting_wire, option[10][1][1][1] ) )
         else:
             nodes_to_analyze.append( ( connecting_wire, option[10][1] ) )
+
+    # Sort sinks so order is by sink id
+    new_sinks.sort( key=lambda x: x[1] )
 
     return new_nodes, new_wires, new_buffers, new_sinks
 
@@ -870,17 +881,24 @@ def synthesize( layout, source, sinks, wire_lib, buf_lib, vdd_sim, slew_limit, c
     # alt version: use average center
     length = get_length( layout, sinks )
     depth = TREE_DEPTH
+
+    print('Start - synthesize tree')
     create_htree( node, length, depth, nodes, wires, wire_lib )
 
     # Connect sinks to closest nodes
     sink_nodes = connect_sinks( sinks, nodes, wires, wire_lib )
+    print('Finish - synthesize tree')
 
     # Trim all branches that are not connected
     if TRIM_TREE:
+        print('Start - trim tree')
         nodes, wires, buffers = trim_tree( source_node, wires, buffers, sink_nodes, nodes )
+        print('Finish - trim tree')
 
     # Insert buffers
+    print('Start - insert buffers')
     nodes, wires, buffers, sink_nodes = insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, sinks, wire_lib, buf_lib )
+    print('Finish - insert buffers')
 
     return ( source_node, nodes, sink_nodes, wires, buffers )
 
@@ -897,8 +915,10 @@ if __name__ == '__main__':
 
     # Parse input
     layout, source, sinks, wire_lib, buf_lib, vdd_sim, slew_limit, cap_limit, blockages = parse_input( input_file )
-    # SLEW_LIMIT = slew_limit
-    # CAP_LIMIT = cap_limit
+    if SLEW_LIMIT != math.inf:
+        SLEW_LIMIT = slew_limit
+    if CAP_LIMIT != math.inf:
+        CAP_LIMIT = cap_limit
 
     # Synthesize clock
     source_node, nodes, sink_nodes, wires, buffers = synthesize( layout, source, sinks, wire_lib, buf_lib, vdd_sim, slew_limit, cap_limit, blockages )
