@@ -11,9 +11,9 @@ TRIM_TREE = True
 LOCALIZED_TREE = True
 
 TREE_DEPTH = 3
-SKEW_DIFF = math.inf
+SKEW_DIFF = 40
 INSERTION_AMT = 10
-SAMPLING_AMT = 500
+SAMPLING_AMT = 100
 
 SLEW_LIMIT = math.inf
 # CAP_LIMIT = math.inf
@@ -526,7 +526,6 @@ def _insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, 
     nodes_to_analyze = leaves
     
     while ( True ):
-        print(nodes_to_analyze, len(options))
         wires_to_analyze = []
         for node in nodes_to_analyze:
             wires_to_analyze += get_wires_to_node( node, wires )
@@ -553,7 +552,6 @@ def _insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, 
 
             # Multiple branches
             elif len( get_wires_from_node( node, wires ) ) > 1:
-                print('merging')
                 # Wires from node
                 wires_from_node = get_wires_from_node( node, wires )
 
@@ -565,7 +563,7 @@ def _insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, 
                             merge_options[i].append( options.pop( j ) )
                 
                 all_combinations = [ (op1, op2) for op1 in merge_options[0] for op2 in merge_options[1] ]
-                print(len(all_combinations))
+                
                 for combination in all_combinations:
                     op1 = combination[0]
                     op2 = combination[1]
@@ -610,7 +608,6 @@ def _insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, 
 
             # Single branch
             else:
-                print('single')
                 wires_from_node = get_wires_from_node( node, wires )
 
                 options_to_check = []
@@ -642,10 +639,8 @@ def _insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, 
         # Remove all nodes
         nodes_to_analyze = []
         
-        print('part 1 - options: ', len(options))
         # Prune options
         options = prune_options( options )
-        print('part 1 - prine: ', len(options))
 
 
         # Reached root node
@@ -722,7 +717,7 @@ def _insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, 
                 options.append( option )
 
             options = prune_options( options )
-    print(len(options))
+    
     # Prune all options at root that have odd inverter cnt (we always add an inverter at the root)
     for i in range( len( options ) - 1, -1, -1 ):
         invt_cnt = options[i][8]
@@ -730,7 +725,7 @@ def _insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, 
             if cnt % 2 != 0:
                 options.pop( i )
                 break
-    print(len(options))
+    
     # Pick best candidate and then add nodes and buffers and update wires
     if len(options) == 0:
         return None
@@ -915,9 +910,9 @@ if __name__ == '__main__':
 
     # Parse input
     layout, source, sinks, wire_lib, buf_lib, vdd_sim, slew_limit, cap_limit, blockages = parse_input( input_file )
-    if SLEW_LIMIT != math.inf:
+    if SLEW_LIMIT == 0:
         SLEW_LIMIT = slew_limit
-    if CAP_LIMIT != math.inf:
+    if CAP_LIMIT == 0:
         CAP_LIMIT = cap_limit
 
     # Synthesize clock
