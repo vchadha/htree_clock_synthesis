@@ -1,5 +1,8 @@
 import sys
 import math
+import random
+
+from bisect import bisect
 
 #
 # Globals
@@ -9,9 +12,11 @@ LOCALIZED_TREE = True
 
 TREE_DEPTH = 3
 SKEW_DIFF = 10
+INSERTION_DIST = 10000
+SAMPLING_AMT = 500
 
-SLEW_LIMIT = 0
-CAP_LIMIT = 0
+SLEW_LIMIT = math.inf
+CAP_LIMIT = math.inf
 
 CLOCK_PERIOD = 500 #ps
 
@@ -454,7 +459,61 @@ def prune_options( options ):
      
     return new_options
 
-def _insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, sinks ):
+def sample( options, to_keep, buckets=10 ):
+    if len(options) < to_keep:
+        return options
+
+    min_slew = SLEW_LIMIT
+    max_slew = 0
+
+    for option in options:
+        if option[3] < min_slew:
+            min_slew = option[3]
+
+        if option[3] > max_slew:
+            max_slew = option[3]
+
+    min_slew = int( math.floor( min_slew ) )
+    max_slew = int( math.ceil( max_slew ) )
+    to_keep = int( math.ceil( to_keep ) )
+    step = int( (max_slew - min_slew) / buckets )
+    # print(min_slew, max_slew, step, to_keep, len(options))
+
+    if step < 1:
+        # Just sample from options
+        new_options = []
+        random_idx = random.sample(range(0, len(options)), to_keep)
+        for idx in random_idx:
+            if options[idx] not in new_options:
+                new_options.append( options[idx] )
+        
+        return new_options
+    else:
+        new_options = []
+
+        # Sample from each bin
+        bins = list( range( min_slew, max_slew, step ) )
+        buckets = {}
+
+        for option in options:
+            idx = bisect(bins, option[3]) - 1
+            buckets.setdefault(bins[idx], []).append(option)
+
+        total = 0
+        for _, val in buckets.items():
+            total += len( val )
+
+        for key, val in buckets.items():
+            to_sample = int( to_keep * ( len( val ) / total ) )
+            random_idx = random.sample(range(0, len(val)), to_sample)
+
+            for idx in random_idx:
+                if val[idx] not in new_options:
+                    new_options.append( val[idx] )
+
+        return new_options
+
+def _insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, sinks, wire_lib, buf_lib ):
     # option = (to node, x, y, slew, cap, delay, RAQ, skew, inv_cnt, buffer?, ( type, ptr ))
     # type = 0 - single, 1 - branch ( 1, (to_node, ptr), (to_node, ptr) )
     options = []
@@ -477,9 +536,15 @@ def _insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, 
             if is_sink( node, sink_nodes ) or node in leaves:
                 _type = 0
                 cap = 0
+                sink_name = -1
                 if is_sink( node, sink_nodes ):
                     cap = get_cap( get_sink_node( node, sink_nodes, sinks ) )
-                option = ( node, x, y, 0, cap, 0, CLOCK_PERIOD, 0, [0], 0, ( _type, None ) )
+                    for sink_node in sink_nodes:
+                        if node == sink_node[0]:
+                            sink_name = sink_node[1]
+                            break
+
+                option = ( node, x, y, 0, cap, 0, CLOCK_PERIOD, 0, [0], 0, ( _type, None, sink_name ) )
                 options.append( option )
 
             # Multiple branches
@@ -594,27 +659,27 @@ def _insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, 
 
             # Calculate buffer dist to allow for good slew
             wire_length = get_wire_length( from_node, to_node )
-            buffer_dist = 10000
+            buffer_dist = INSERTION_DIST
 
-            if wire_length != 0:
-                avg_cap = 0
-                for op in curr_options:
-                    avg_cap += op[4]
-                if len( curr_options ):
-                    avg_cap /= len( curr_options )
-                _load_cap = avg_cap
-                _r = get_wire_resistence( wire_lib )
-                _c = get_wire_cap( wire_lib )
+            # if wire_length != 0:
+            #     avg_cap = 0
+            #     for op in curr_options:
+            #         avg_cap += op[4]
+            #     if len( curr_options ):
+            #         avg_cap /= len( curr_options )
+            #     _load_cap = avg_cap
+            #     _r = get_wire_resistence( wire_lib )
+            #     _c = get_wire_cap( wire_lib )
                 
-                _a = math.sqrt( 2 * math.log( 3 ) )
-                _b = math.sqrt( ( wire_length ** 2 ) * _r * ( 198 * _c  + 2 * _r * ( _load_cap ** 2 ) * math.log( 3 ) ) )
-                _d = 2 * wire_length * _r * _load_cap * math.log( 3 )
-                _x = ( 1 / 198 ) * ( _a * _b + _d )
+            #     _a = math.sqrt( 2 * math.log( 3 ) )
+            #     _b = math.sqrt( ( wire_length ** 2 ) * _r * ( 198 * _c  + 2 * _r * ( _load_cap ** 2 ) * math.log( 3 ) ) )
+            #     _d = 2 * wire_length * _r * _load_cap * math.log( 3 )
+            #     _x = ( 1 / 198 ) * ( _a * _b + _d )
 
-                buffer_dist = wire_length / _x
+            #     buffer_dist = wire_length / _x
             
             insertion_points = get_feasible_insertion_points( from_node, to_node, buffer_dist, blockages )
-
+            
             # Iterate over insertion points
             for point in insertion_points:
                 new_options = []
@@ -655,6 +720,8 @@ def _insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, 
                         new_options.append( temp_option2 )
 
                 new_options = prune_options( new_options )
+                if len( new_options ) > SAMPLING_AMT:
+                    new_options = sample( new_options, len( new_options ) / 2 )
                 curr_options = new_options
 
             for option in curr_options:
@@ -670,15 +737,102 @@ def _insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, 
                 options.pop( i )
                 break
 
-    print( len(options) )
-    # TODO: pick best candidate and then add nodes and buffers and update wires
+    # Pick best candidate and then add nodes and buffers and update wires
+    if len(options) == 0:
+        return None
 
-def insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, sinks ):    
-    best_option = _insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, sinks )
+    best_option = options[0]
+    for option in options:
+        if option[7] < best_option[7]:
+            best_option = option
+        elif option[7] == best_option[7]:
+            if option[3] < best_option[3]:
+                best_option = option
+            elif option[3] == best_option[3]:
+                if option[4] < option[4]:
+                    best_option = option
 
-    # TODO: start from scratch and remake wires nodes buffers etc
+    return best_option
 
-    return nodes, wires, buffers
+def insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, sinks, wire_lib, buf_lib ):    
+    best_option = _insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, sinks, wire_lib, buf_lib )
+    
+    if best_option == None:
+        print('No valid buffer soln found.')
+        return nodes, wires, buffers, sink_nodes
+    
+    new_nodes = []
+    new_wires = []
+    new_buffers = []
+    new_sinks = []
+
+    # Add initial source buffer
+    buffer = [source_node[0], 1, get_buffer_type( buf_lib )]
+    new_buffers.append( buffer )
+
+    # Node cnt
+    node_cnt = 1
+    
+    # (Connecting wire, option)
+    nodes_to_analyze = [ (None, best_option) ]
+
+    while( len( nodes_to_analyze ) ):
+        node_to_analyze = nodes_to_analyze.pop()
+        connecting_wire = node_to_analyze[0]
+        option = node_to_analyze[1]
+
+        # Add sink and leaf nodes
+        if option[10][1] == None:
+            # Sink
+            if option[10][2] != -1:
+                sink = [ node_cnt, option[10][2] ]
+                wire = [ connecting_wire, node_cnt, get_wire_type( wire_lib ) ]
+
+                node_cnt += 1
+                new_sinks.append( sink )
+                new_wires.append( wire )
+            else:
+                node = [ node_cnt, int( option[1] ), int( option[2] ) ]
+                wire = [ connecting_wire, node_cnt, get_wire_type( wire_lib ) ]
+
+                node_cnt += 1
+                new_nodes.append( node )
+                new_wires.append( wire )
+
+            continue
+
+        node = [ node_cnt, int( option[1] ), int( option[2] ) ]
+
+        if connecting_wire:
+            wire = [ connecting_wire, node_cnt, get_wire_type( wire_lib ) ]
+            new_wires.append( wire )
+
+        node_cnt += 1
+        new_nodes.append( node )
+
+        # Next connecting wire
+        connecting_wire = node_cnt - 1
+
+        # Add buffer
+        if option[9] == 1:
+            node = [ node_cnt, int( option[1] ), int( option[2] ) ]
+            node_cnt += 1
+
+            new_nodes.append( node )
+
+            buffer = [ node_cnt - 2, node_cnt - 1, get_buffer_type( buf_lib ) ]
+            new_buffers.append( buffer )
+
+            connecting_wire = node_cnt - 1
+
+        # Branch
+        if option[10][0] == 1:
+            nodes_to_analyze.append( ( connecting_wire, option[10][1][0] ) )
+            nodes_to_analyze.append( ( connecting_wire, option[10][1][1] ) )
+        else:
+            nodes_to_analyze.append( ( connecting_wire, option[10][1] ) )
+
+    return new_nodes, new_wires, new_buffers, new_sinks
 
 # TODO: h-tree uniform trim and nontrim, non-uniform trim and nontrim
 def synthesize( layout, source, sinks, wire_lib, buf_lib, vdd_sim, slew_limit, cap_limit, blockages ):
@@ -726,7 +880,7 @@ def synthesize( layout, source, sinks, wire_lib, buf_lib, vdd_sim, slew_limit, c
         nodes, wires, buffers = trim_tree( source_node, wires, buffers, sink_nodes, nodes )
 
     # Insert buffers
-    nodes, wires, buffers = insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, sinks )
+    nodes, wires, buffers, sink_nodes = insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, sinks, wire_lib, buf_lib )
 
     return ( source_node, nodes, sink_nodes, wires, buffers )
 
@@ -743,10 +897,8 @@ if __name__ == '__main__':
 
     # Parse input
     layout, source, sinks, wire_lib, buf_lib, vdd_sim, slew_limit, cap_limit, blockages = parse_input( input_file )
-    SLEW_LIMIT = slew_limit
-    CAP_LIMIT = cap_limit
-    # SLEW_LIMIT = 150
-    # CAP_LIMIT = 100
+    # SLEW_LIMIT = slew_limit
+    # CAP_LIMIT = cap_limit
 
     # Synthesize clock
     source_node, nodes, sink_nodes, wires, buffers = synthesize( layout, source, sinks, wire_lib, buf_lib, vdd_sim, slew_limit, cap_limit, blockages )
