@@ -13,7 +13,7 @@ LOCALIZED_TREE = True
 TREE_DEPTH = 3
 SKEW_DIFF = 40
 INSERTION_AMT = 10
-SAMPLING_AMT = 100
+SAMPLING_AMT = 1000
 
 SLEW_LIMIT = math.inf
 # CAP_LIMIT = math.inf
@@ -519,6 +519,7 @@ def sample( options, to_keep, buckets=10 ):
 def _insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, sinks, wire_lib, buf_lib ):
     # option = (to node, x, y, slew, cap, delay, RAQ, skew, inv_cnt, buffer?, ( type, ptr ))
     # type = 0 - single, 1 - branch ( 1, (to_node, ptr), (to_node, ptr) )
+    # Inverter cnt is actually polarity (0 for pos, 1 for neg)
     options = []
     
     # each node has a list of options (when we get to root, we have one node and a final list of options)
@@ -547,7 +548,7 @@ def _insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, 
                             sink_name = sink_node[1]
                             break
 
-                option = ( node, x, y, 0, cap, 0, CLOCK_PERIOD, 0, [0], 0, ( _type, None, sink_name ) )
+                option = ( node, x, y, 0, cap, 0, CLOCK_PERIOD, 0, 0, 0, ( _type, None, sink_name ) )
                 options.append( option )
 
             # Multiple branches
@@ -563,7 +564,7 @@ def _insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, 
                             merge_options[i].append( options.pop( j ) )
                 
                 all_combinations = [ (op1, op2) for op1 in merge_options[0] for op2 in merge_options[1] ]
-                
+                # print('comb: ', len(all_combinations))
                 for combination in all_combinations:
                     op1 = combination[0]
                     op2 = combination[1]
@@ -597,13 +598,15 @@ def _insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, 
 
                     raq = min( op1[6], op2[6] )
                     skew = abs( op1[5] - op2[5] )
-                    invt_cnt = op1[8] + op2[8]
+                    invt_cnt = op1[8]
 
                     temp_option = ( node, x, y, slew, cap, delay, raq, skew, invt_cnt, 0, ( 1, ( ( op1[0], op1 ), ( op2[0], op2 ) ) ) )
 
                     # If option is valid, add to option lists
-                    if temp_option[3] < SLEW_LIMIT and temp_option[4] < CAP_LIMIT and temp_option[7] < SKEW_DIFF:
+                    if temp_option[3] < SLEW_LIMIT and temp_option[4] < CAP_LIMIT and temp_option[7] < SKEW_DIFF and op1[8] == op2[8]:
                         options.append( temp_option )
+                    # else:
+                    #     print('Not same polarity')
                 
 
             # Single branch
@@ -640,6 +643,8 @@ def _insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, 
         nodes_to_analyze = []
         
         # Prune options
+        if len( options ) > SAMPLING_AMT:
+            options = sample( options, 2 * len( options ) / 3 )
         options = prune_options( options )
 
 
@@ -686,14 +691,12 @@ def _insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, 
                     raq = option[6] - get_delay( wire, length, load_cap )
 
                     skew = option[7]
-                    invt_cnt = option[8]
+                    invt_cnt = option[8] ^ 0
 
                     temp_option1 = ( option[0], point[0], point[1], slew, cap, delay, raq, skew, invt_cnt, 0, ( 0, option ) )
 
                     buf_cap = get_buffer_cap( buf_lib )
-                    new_invt_cnt = []
-                    for cnt in invt_cnt:
-                        new_invt_cnt.append( cnt + 1 )
+                    new_invt_cnt = option[8] ^ 1
                     
                     buf_delay = get_buffer_resistence( buf_lib ) * ( option[4] + get_wire_cap( wire_lib ) )
                     new_delay = delay + buf_delay
@@ -708,23 +711,22 @@ def _insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, 
                     if temp_option2[3] < SLEW_LIMIT and temp_option2[4] < CAP_LIMIT:
                         new_options.append( temp_option2 )
 
-                new_options = prune_options( new_options )
                 if len( new_options ) > SAMPLING_AMT:
-                    new_options = sample( new_options, len( new_options ) / 2 )
+                    new_options = sample( new_options, 2 * len( new_options ) / 3 )
+                new_options = prune_options( new_options )
                 curr_options = new_options
 
             for option in curr_options:
                 options.append( option )
 
             options = prune_options( options )
-    
+   
+    print('Found options: ', len(options))
     # Prune all options at root that have odd inverter cnt (we always add an inverter at the root)
     for i in range( len( options ) - 1, -1, -1 ):
         invt_cnt = options[i][8]
-        for cnt in invt_cnt:
-            if cnt % 2 != 0:
-                options.pop( i )
-                break
+        if invt_cnt == 0:
+            options.pop( i )
     
     # Pick best candidate and then add nodes and buffers and update wires
     if len(options) == 0:
