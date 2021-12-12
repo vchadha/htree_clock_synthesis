@@ -1,6 +1,7 @@
 import sys
 import math
 import random
+import itertools
 
 from bisect import bisect
 
@@ -12,8 +13,8 @@ LOCALIZED_TREE = True
 
 TREE_DEPTH = 3
 SKEW_DIFF = 40
-INSERTION_AMT = 10
-SAMPLING_AMT = 1000
+INSERTION_AMT = 100
+SAMPLING_AMT = 5000
 
 SLEW_LIMIT = math.inf
 # CAP_LIMIT = math.inf
@@ -563,47 +564,58 @@ def _insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, 
                         if options[j][0] == wires_from_node[i][1]:
                             merge_options[i].append( options.pop( j ) )
                 
-                all_combinations = [ (op1, op2) for op1 in merge_options[0] for op2 in merge_options[1] ]
+                all_combinations = list( itertools.product( *merge_options ) )
+
                 # print('comb: ', len(all_combinations))
-                for combination in all_combinations:
-                    op1 = combination[0]
-                    op2 = combination[1]
-                    # Create option
-                    slew = 0
-                    if op2[3] > op1[3]:
-                        wire = wire_lib[get_wire_type( wire_lib )]
-                        length = dist( complete_node, op2 )
-                        load_cap = op2[4]
-                        slew = math.log( 9 ) * get_delay( wire, length, load_cap )
-                    else:
-                        wire = wire_lib[get_wire_type( wire_lib )]
-                        length = dist( complete_node, op1 )
-                        load_cap = op1[4]
+                for combination in all_combinations:                    
+                    wire = wire_lib[get_wire_type( wire_lib )]
 
-                        slew = math.log( 9 ) * get_delay( wire, length, load_cap )
+                    max_slew_option = combination[0]
+                    for op in combination:
+                        if op[3] > max_slew_option[3]:
+                            max_slew_option = op
+                    length = dist( complete_node, max_slew_option )
+                    load_cap = max_slew_option[4]
+                    slew = math.log( 9 ) * get_delay( wire, length, load_cap )
+                    
+                    cap = 0
+                    for op in combination:
+                        cap += op[4]
 
-                    cap = op1[4] + op2[4]
+                    max_delay_option = combination[0]
+                    for op in combination:
+                        if op[5] > max_delay_option[5]:
+                            max_delay_option = op
+                    length = dist( complete_node, max_delay_option )
+                    load_cap = max_delay_option[4]
+                    delay = max_delay_option[5] + get_delay( wire, length, load_cap )
 
-                    delay = 0
-                    if op2[5] > op1[5]:
-                        wire = wire_lib[get_wire_type( wire_lib )]
-                        length = dist( complete_node, op2 )
-                        load_cap = op2[4]
-                        delay = op2[5] + get_delay( wire, length, load_cap )
-                    else:
-                        wire = wire_lib[get_wire_type( wire_lib )]
-                        length = dist( complete_node, op1 )
-                        load_cap = op1[4]
-                        delay = op1[5] + get_delay( wire, length, load_cap )
+                    raq = combination[0][6]
+                    for op in combination:
+                        if op[6] < raq:
+                            raq = op[6]
 
-                    raq = min( op1[6], op2[6] )
-                    skew = abs( op1[5] - op2[5] )
-                    invt_cnt = op1[8]
+                    skew = 0
+                    for i in range( len( combination ) ):
+                        for j in range( len( combination ) ):
+                            if i == j:
+                                continue
 
-                    temp_option = ( node, x, y, slew, cap, delay, raq, skew, invt_cnt, 0, ( 1, ( ( op1[0], op1 ), ( op2[0], op2 ) ) ) )
+                            op_skew = abs( combination[i][5] - combination[j][5] )
+                            if op_skew > skew:
+                                skew = op_skew
+
+                    invt_cnt = combination[0][8]
+                    invt_valid = True
+                    for op in combination:
+                        if invt_cnt != op[8]:
+                            invt_valid  = False
+                            break
+
+                    temp_option = ( node, x, y, slew, cap, delay, raq, skew, invt_cnt, 0, ( 1, combination ) )
 
                     # If option is valid, add to option lists
-                    if temp_option[3] < SLEW_LIMIT and temp_option[4] < CAP_LIMIT and temp_option[7] < SKEW_DIFF and op1[8] == op2[8]:
+                    if invt_valid and temp_option[3] < SLEW_LIMIT and temp_option[4] < CAP_LIMIT and temp_option[7] < SKEW_DIFF:
                         options.append( temp_option )
                     # else:
                     #     print('Not same polarity')
@@ -721,12 +733,13 @@ def _insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, 
 
             options = prune_options( options )
    
-    print('Found options: ', len(options))
     # Prune all options at root that have odd inverter cnt (we always add an inverter at the root)
     for i in range( len( options ) - 1, -1, -1 ):
         invt_cnt = options[i][8]
         if invt_cnt == 0:
             options.pop( i )
+    
+    print('Found options: ', len(options))
     
     # Pick best candidate and then add nodes and buffers and update wires
     if len(options) == 0:
@@ -832,8 +845,9 @@ def insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, s
 
         # Branch
         if option[10][0] == 1:
-            nodes_to_analyze.append( ( connecting_wire, option[10][1][0][1] ) )
-            nodes_to_analyze.append( ( connecting_wire, option[10][1][1][1] ) )
+            options_to_add = option[10][1]
+            for op in options_to_add:
+                nodes_to_analyze.append( ( connecting_wire, op ) )
         else:
             nodes_to_analyze.append( ( connecting_wire, option[10][1] ) )
 
