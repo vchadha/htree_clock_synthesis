@@ -8,8 +8,11 @@ from bisect import bisect
 #
 # Globals
 #
-TRIM_TREE = True
-LOCALIZED_TREE = True
+GENERATE_ALL_TREES = True
+
+INSERT_BUFFERS = False
+TRIM_TREE = False
+LOCALIZED_TREE = False
 
 TREE_DEPTH = 3
 SKEW_DIFF = 40
@@ -907,9 +910,10 @@ def synthesize( layout, source, sinks, wire_lib, buf_lib, vdd_sim, slew_limit, c
         print('Finish - trim tree')
 
     # Insert buffers
-    print('Start - insert buffers')
-    nodes, wires, buffers, sink_nodes = insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, sinks, wire_lib, buf_lib )
-    print('Finish - insert buffers')
+    if INSERT_BUFFERS:
+        print('Start - insert buffers')
+        nodes, wires, buffers, sink_nodes = insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, sinks, wire_lib, buf_lib )
+        print('Finish - insert buffers')
 
     return ( source_node, nodes, sink_nodes, wires, buffers )
 
@@ -931,8 +935,53 @@ if __name__ == '__main__':
     if CAP_LIMIT == 0:
         CAP_LIMIT = cap_limit
 
-    # Synthesize clock
-    source_node, nodes, sink_nodes, wires, buffers = synthesize( layout, source, sinks, wire_lib, buf_lib, vdd_sim, slew_limit, cap_limit, blockages )
+    if GENERATE_ALL_TREES:
+        # Center full
+        TRIM_TREE = False
+        LOCALIZED_TREE = False
+        output_file = sys.argv[2] + '_cf'
 
-    # Write output
-    write_out( output_file, source_node, nodes, sink_nodes, wires, buffers )
+        # Synthesize clock
+        source_node, nodes, sink_nodes, wires, buffers = synthesize( layout, source, sinks, wire_lib, buf_lib, vdd_sim, slew_limit, cap_limit, blockages )
+
+        # Write output
+        write_out( output_file, source_node, nodes, sink_nodes, wires, buffers )
+
+        # Center trim
+        TRIM_TREE = True
+        LOCALIZED_TREE = False
+        output_file = sys.argv[2] + '_ct'
+
+        # Synthesize clock
+        source_node, nodes, sink_nodes, wires, buffers = synthesize( layout, source, sinks, wire_lib, buf_lib, vdd_sim, slew_limit, cap_limit, blockages )
+
+        # Write output
+        write_out( output_file, source_node, nodes, sink_nodes, wires, buffers )
+
+        # Localized full
+        TRIM_TREE = False
+        LOCALIZED_TREE = True
+        output_file = sys.argv[2] + '_lf'
+
+        # Synthesize clock
+        source_node, nodes, sink_nodes, wires, buffers = synthesize( layout, source, sinks, wire_lib, buf_lib, vdd_sim, slew_limit, cap_limit, blockages )
+
+        # Write output
+        write_out( output_file, source_node, nodes, sink_nodes, wires, buffers )
+
+        # Localized trim
+        TRIM_TREE = True
+        LOCALIZED_TREE = True
+        output_file = sys.argv[2] + '_lt'
+
+        # Synthesize clock
+        source_node, nodes, sink_nodes, wires, buffers = synthesize( layout, source, sinks, wire_lib, buf_lib, vdd_sim, slew_limit, cap_limit, blockages )
+
+        # Write output
+        write_out( output_file, source_node, nodes, sink_nodes, wires, buffers )
+    else:
+        # Synthesize clock
+        source_node, nodes, sink_nodes, wires, buffers = synthesize( layout, source, sinks, wire_lib, buf_lib, vdd_sim, slew_limit, cap_limit, blockages )
+
+        # Write output
+        write_out( output_file, source_node, nodes, sink_nodes, wires, buffers )
