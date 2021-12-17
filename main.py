@@ -2,6 +2,7 @@ import sys
 import math
 import random
 import itertools
+import time
 
 from bisect import bisect
 
@@ -17,7 +18,7 @@ LOCALIZED_TREE = False
 TREE_DEPTH = 3
 SKEW_DIFF = 40
 INSERTION_AMT = 100
-SAMPLING_AMT = 5000
+SAMPLING_AMT = 100
 
 SLEW_LIMIT = math.inf
 # CAP_LIMIT = math.inf
@@ -739,7 +740,7 @@ def _insert_buffers( source_node, wires, buffers, sink_nodes, nodes, blockages, 
     # Prune all options at root that have odd inverter cnt (we always add an inverter at the root)
     for i in range( len( options ) - 1, -1, -1 ):
         invt_cnt = options[i][8]
-        if invt_cnt == 0:
+        if invt_cnt == 1:
             options.pop( i )
     
     print('Found options: ', len(options))
@@ -942,7 +943,10 @@ if __name__ == '__main__':
         output_file = sys.argv[2] + '_cf'
 
         # Synthesize clock
+        t1 = time.time()
         source_node, nodes, sink_nodes, wires, buffers = synthesize( layout, source, sinks, wire_lib, buf_lib, vdd_sim, slew_limit, cap_limit, blockages )
+        t2 = time.time()
+        print('detla t: {}'.format( t2 - t1 ))
 
         # Write output
         write_out( output_file, source_node, nodes, sink_nodes, wires, buffers )
@@ -953,7 +957,10 @@ if __name__ == '__main__':
         output_file = sys.argv[2] + '_ct'
 
         # Synthesize clock
+        t1 = time.time()
         source_node, nodes, sink_nodes, wires, buffers = synthesize( layout, source, sinks, wire_lib, buf_lib, vdd_sim, slew_limit, cap_limit, blockages )
+        t2 = time.time()
+        print('detla t: {}'.format( t2 - t1 ))
 
         # Write output
         write_out( output_file, source_node, nodes, sink_nodes, wires, buffers )
@@ -964,7 +971,10 @@ if __name__ == '__main__':
         output_file = sys.argv[2] + '_lf'
 
         # Synthesize clock
+        t1 = time.time()
         source_node, nodes, sink_nodes, wires, buffers = synthesize( layout, source, sinks, wire_lib, buf_lib, vdd_sim, slew_limit, cap_limit, blockages )
+        t2 = time.time()
+        print('detla t: {}'.format( t2 - t1 ))
 
         # Write output
         write_out( output_file, source_node, nodes, sink_nodes, wires, buffers )
@@ -975,7 +985,10 @@ if __name__ == '__main__':
         output_file = sys.argv[2] + '_lt'
 
         # Synthesize clock
+        t1 = time.time()
         source_node, nodes, sink_nodes, wires, buffers = synthesize( layout, source, sinks, wire_lib, buf_lib, vdd_sim, slew_limit, cap_limit, blockages )
+        t2 = time.time()
+        print('detla t: {}'.format( t2 - t1 ))
 
         # Write output
         write_out( output_file, source_node, nodes, sink_nodes, wires, buffers )
